@@ -46,7 +46,9 @@ study   = model.study(studies(1));
 
 fprintf('\nBalayage paramétrique (%d configurations) -> %s\n', numel(combos), H5_FILE);
 
+t0 = tic;
 for i = 1:numel(combos)
+    t = tic;
     p = combos(i);
     fprintf('\n[%d/%d] %s\n', i, numel(combos), jsonencode(p));
 
@@ -61,11 +63,12 @@ for i = 1:numel(combos)
                   'XYZ', attCoords(model, nodes));
 
     fprintf('    XYZ (um) : %s\n', mat2str(round(data.XYZ, 3)));
-    fprintf('    -> %s/%s\n', GROUP_NAME, save2hdf(H5_FILE, GROUP_NAME, p, data, meta));
+    id = save2hdf(H5_FILE, GROUP_NAME, p, data, meta);
+    fprintf('    -> %s/%s  (%.1f s)\n', GROUP_NAME, id, toc(t));
 end
 
 com.comsol.model.util.ModelUtil.remove(model.tag);
-disp('Extraction terminée !')
+fprintf('\nExtraction terminée en %.1f s !\n', toc(t0));
 
 %% ──────────────────────────────── FONCTIONS ─────────────────────────────
 function combos = balayage(params)
