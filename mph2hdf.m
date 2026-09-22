@@ -39,6 +39,9 @@ assert(numel(S) == numel(dofs), 'S a %d termes pour %d DDL', numel(S), numel(dof
 combos = balayage(parameters);
 meta   = struct('dofs', {dofs}, 'nodes', {cellstr(string(1:numel(nodes)))});
 
+import com.comsol.model.util.*
+ModelUtil.showProgress(true);                   % fenêtre de progression COMSOL
+
 disp('Chargement du modèle COMSOL...')
 model   = mphload(MPH_FILE);
 studies = model.study.tags;
@@ -67,7 +70,8 @@ for i = 1:numel(combos)
     fprintf('    -> %s/%s  (%.1f s)\n', GROUP_NAME, id, toc(t));
 end
 
-com.comsol.model.util.ModelUtil.remove(model.tag);
+ModelUtil.remove(model.tag);
+ModelUtil.showProgress(false);
 fprintf('\nExtraction terminée en %.1f s !\n', toc(t0));
 
 %% ──────────────────────────────── FONCTIONS ─────────────────────────────
