@@ -13,7 +13,6 @@
 %   mph2hdf.py.
 %
 %   À lancer depuis « COMSOL Multiphysics with MATLAB » (ou après mphstart).
-%   MATLAB R2020b ou plus récent.
 
 H5_FILE     = 'aps.h5';
 DATASET_ROM = 'rom1_n_rfc1_solid_1';
@@ -23,9 +22,9 @@ SYS_MATRIX  = 'sys1';
 MPH_FILE   = 'C:\Users\GM287120\Desktop\Comsol\SuperElements\p110.mph';
 GROUP_NAME = 'p110';
 
-dofs = ["eta1", ...
-        "n1.ux", "n1.uy", "n1.uz", "n1.rx", "n1.ry", "n1.rz", ...
-        "n2.ux", "n2.uy", "n2.uz", "n2.rx", "n2.ry", "n2.rz"];
+dofs = {'eta1', ...
+        'n1.ux', 'n1.uy', 'n1.uz', 'n1.rx', 'n1.ry', 'n1.rz', ...
+        'n2.ux', 'n2.uy', 'n2.uz', 'n2.rx', 'n2.ry', 'n2.rz'};
 
 nodes = struct('n1', 'comp1.solid.att1', ...
                'n2', 'comp1.solid.att2');
@@ -38,8 +37,8 @@ S = [1, repmat([1 1 1 0.5e6 0.5e6 0.5e6], 1, 2)];
 assert(numel(S) == numel(dofs), 'S a %d termes pour %d DDL', numel(S), numel(dofs));
 
 combos   = balayage(parameters);
-grp      = "/" + GROUP_NAME;
-grpAttrs = struct('dofs', dofs, 'nodes', string(fieldnames(nodes)));
+grp      = ['/' GROUP_NAME];
+grpAttrs = struct('dofs', {dofs}, 'nodes', {fieldnames(nodes)});
 
 disp('Chargement du modèle COMSOL...')
 model   = mphload(MPH_FILE);
@@ -57,8 +56,8 @@ for i = 1:numel(combos)
     end
     study.run;
 
-    sys  = model.result.numerical(SYS_MATRIX);  % n'existe qu'après résolution
-    XYZ  = attCoords(model, string(struct2cell(nodes)));
+    sys  = model.result.numerical(SYS_MATRIX);
+    XYZ  = attCoords(model, struct2cell(nodes));
     data = struct('K',   reducedMatrix(sys, DATASET_ROM, 'stiffness', S), ...
                   'M',   reducedMatrix(sys, DATASET_ROM, 'mass', S), ...
                   'XYZ', XYZ);
@@ -93,7 +92,7 @@ end
 
 function xyz = attCoords(model, tags)
 %ATTCOORDS Positions (um) des attachements -> matrice (n_nodes, 3).
-expr = cellstr(tags(:).' + [".xcx"; ".xcy"; ".xcz"]);   % 3 x n_nodes
+expr = cellstr(string(tags(:)).' + [".xcx"; ".xcy"; ".xcz"]);   % 3 x n_nodes
 vals = cell(size(expr));
 [vals{:}] = mphglobal(model, expr(:).', 'unit', repmat({'um'}, 1, numel(expr)));
 xyz = cellfun(@(v) v(1), vals).';
@@ -114,17 +113,17 @@ end
 function id = save2hdf(h5File, grp, grpAttrs, p, data)
 %SAVE2HDF Écrit une configuration dans le HDF5, renvoie son identifiant.
 [id, isNew] = configId(h5File, grp, p);
-cfg = grp + "/" + id;
-for name = string(fieldnames(data)).'
-    writeDataset(h5File, cfg + "/" + name, data.(name));
+cfg = [grp '/' id];
+for name = fieldnames(data).'
+    writeDataset(h5File, [cfg '/' name{1}], data.(name{1}));
 end
 if isNew
-    for name = string(fieldnames(p)).'
-        h5writeatt(h5File, cfg, name, p.(name));
+    for name = fieldnames(p).'
+        h5writeatt(h5File, cfg, name{1}, p.(name{1}));
     end
 end
-for name = string(fieldnames(grpAttrs)).'
-    h5writeatt(h5File, grp, name, grpAttrs.(name), 'TextEncoding', 'UTF-8');
+for name = fieldnames(grpAttrs).'
+    writeStrAttr(h5File, grp, name{1}, grpAttrs.(name{1}));
 end
 end
 
@@ -139,13 +138,13 @@ end
 isNew = false;
 ids   = 0;
 for c = reshape(cfgs, 1, [])
-    id = extractAfter(string(c.Name), grp + "/");
-    if matches(id, digitsPattern)
+    id = c.Name(numel(grp) + 2:end);            % '/p110/12' -> '12'
+    if ~isempty(regexp(id, '^\d+$', 'once'))
         if sameParams(c, p), return, end
-        ids(end + 1) = double(id); %#ok<AGROW>
+        ids(end + 1) = str2double(id); %#ok<AGROW>
     end
 end
-id    = string(max(ids) + 1);
+id    = num2str(max(ids) + 1);
 isNew = true;
 end
 
@@ -155,9 +154,9 @@ isclose = @(a, b) abs(a - b) <= 1e-8 + 1e-5 * abs(b);
 a = info.Attributes;
 if isempty(a), a = struct('Name', {}, 'Value', {}); end
 tf = true;
-for name = string(fieldnames(p)).'
-    k  = strcmp({a.Name}, name);
-    tf = tf && any(k) && isclose(a(k).Value, p.(name));
+for name = fieldnames(p).'
+    k  = strcmp({a.Name}, name{1});
+    tf = tf && any(k) && isclose(a(k).Value, p.(name{1}));
 end
 end
 
@@ -167,7 +166,21 @@ x = x.';                                        % ordre colonnes -> ordre C (h5p
 try
     h5create(h5File, ds, size(x), 'ChunkSize', size(x), 'Deflate', 4);
 catch err
-    if err.identifier ~= "MATLAB:imagesci:h5create:datasetAlreadyExists", rethrow(err), end
+    if ~strcmp(err.identifier, 'MATLAB:imagesci:h5create:datasetAlreadyExists'), rethrow(err), end
 end
 h5write(h5File, ds, x);
+end
+
+function writeStrAttr(h5File, loc, name, str)
+%WRITESTRATTR Attribut tableau de chaînes UTF-8 de longueur variable (comme h5py).
+fid   = H5F.open(h5File, 'H5F_ACC_RDWR', 'H5P_DEFAULT');
+gid   = H5G.open(fid, loc);
+type  = H5T.copy('H5T_C_S1');
+H5T.set_size(type, 'H5T_VARIABLE');
+H5T.set_cset(type, H5ML.get_constant_value('H5T_CSET_UTF8'));
+space = H5S.create_simple(1, numel(str), []);
+try, H5A.delete(gid, name); catch, end          % remplace l'attribut s'il existe
+attr  = H5A.create(gid, name, type, space, 'H5P_DEFAULT');
+H5A.write(attr, type, str);
+H5A.close(attr); H5S.close(space); H5T.close(type); H5G.close(gid); H5F.close(fid);
 end
