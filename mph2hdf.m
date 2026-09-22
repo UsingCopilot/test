@@ -45,7 +45,6 @@ disp('Chargement du modèle COMSOL...')
 model   = mphload(MPH_FILE);
 studies = model.study.tags;
 study   = model.study(studies(1));
-sys     = model.result.numerical(SYS_MATRIX);
 
 fprintf('\nBalayage paramétrique (%d configurations) -> %s\n', numel(combos), H5_FILE);
 
@@ -58,6 +57,7 @@ for i = 1:numel(combos)
     end
     study.run;
 
+    sys  = model.result.numerical(SYS_MATRIX);  % n'existe qu'après résolution
     XYZ  = attCoords(model, string(struct2cell(nodes)));
     data = struct('K',   reducedMatrix(sys, DATASET_ROM, 'stiffness', S), ...
                   'M',   reducedMatrix(sys, DATASET_ROM, 'mass', S), ...
