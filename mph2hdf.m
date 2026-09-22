@@ -1,7 +1,7 @@
 %MPH2HDF Extraction COMSOL -> HDF5 (à lancer depuis « COMSOL with MATLAB »).
 %   Pour chaque combinaison de paramètres, écrit dans H5_FILE le groupe
-%   /GROUP_NAME/<id> : attributs l, w, ..., dofs, nodes ('1', '2', ...),
-%   datasets K, M (n_dofs, n_dofs) et XYZ (n_nodes, 3) en um.
+%   /GROUP_NAME/<id> : attributs l, w, ..., dofs, datasets K, M (n_dofs, n_dofs)
+%   et XYZ (n_nodes, 3) en um, noeuds dans l'ordre de `nodes`.
 %   Une configuration déjà présente (mêmes paramètres) est remplacée.
 
 H5_FILE     = 'aps.h5';
@@ -31,7 +31,6 @@ names  = fieldnames(parameters);
 grids  = struct2cell(parameters);
 [grids{:}] = ndgrid(grids{:});                  % toutes les combinaisons
 combos = cell2mat(cellfun(@(g) g(:), grids', 'UniformOutput', false));   % une ligne par combinaison
-meta   = struct('dofs', {dofs}, 'nodes', {cellstr(string(1:numel(nodes)))});
 
 model   = mphload(MPH_FILE);
 studies = model.study.tags;
@@ -51,7 +50,7 @@ for i = 1:size(combos, 1)
                   'M',   reducedMatrix(sys, DATASET_ROM, 'mass', S), ...
                   'XYZ', attCoords(model, nodes));
 
-    id = save2hdf(H5_FILE, GROUP_NAME, names, combos(i, :), data, meta);
+    id = save2hdf(H5_FILE, GROUP_NAME, names, combos(i, :), data, dofs);
     fprintf(' -> %s/%d (%.1f s)\n', GROUP_NAME, id, toc(t));
 end
 fprintf('Terminé en %.1f s\n', toc(t0));
@@ -79,7 +78,7 @@ end
 xyz(abs(xyz) < 1e-15) = 0;
 end
 
-function id = save2hdf(h5File, group, names, vals, data, meta)
+function id = save2hdf(h5File, group, names, vals, data, dofs)
 %SAVE2HDF Écrit une configuration dans /group/<id> et renvoie id.
 [id, found] = findConfig(h5File, group, names, vals);
 cfg = sprintf('/%s/%d', group, id);
@@ -91,7 +90,7 @@ end
 for k = 1:numel(names)
     h5writeatt(h5File, cfg, names{k}, vals(k));
 end
-writeStrAttrs(h5File, cfg, meta);
+writeStrAttr(h5File, cfg, 'dofs', dofs);
 end
 
 function [id, found] = findConfig(h5File, group, names, vals)
@@ -108,18 +107,15 @@ end
 [id, found] = deal(id + 1, false);
 end
 
-function writeStrAttrs(h5File, loc, s)
-%WRITESTRATTRS Écrit chaque champ de s en attribut « liste de textes » (format h5py).
+function writeStrAttr(h5File, loc, name, str)
+%WRITESTRATTR Écrit l'attribut « liste de textes » str (format h5py).
 fid = H5F.open(h5File, 'H5F_ACC_RDWR', 'H5P_DEFAULT');
 gid = H5G.open(fid, loc);
 typ = H5T.copy('H5T_C_S1');
 H5T.set_size(typ, 'H5T_VARIABLE');
-for f = fieldnames(s)'
-    try, H5A.delete(gid, f{1}); catch, end      % remplace l'attribut existant
-    spc = H5S.create_simple(1, numel(s.(f{1})), []);
-    att = H5A.create(gid, f{1}, typ, spc, 'H5P_DEFAULT');
-    H5A.write(att, typ, s.(f{1}));
-    H5A.close(att); H5S.close(spc);
-end
-H5T.close(typ); H5G.close(gid); H5F.close(fid);
+spc = H5S.create_simple(1, numel(str), []);
+try, H5A.delete(gid, name); catch, end          % remplace l'attribut existant
+att = H5A.create(gid, name, typ, spc, 'H5P_DEFAULT');
+H5A.write(att, typ, str);
+H5A.close(att); H5S.close(spc); H5T.close(typ); H5G.close(gid); H5F.close(fid);
 end
