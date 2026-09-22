@@ -1,16 +1,16 @@
 %MPH2HDF Extraction COMSOL -> HDF5 (LiveLink for MATLAB).
 %
-%   /<GROUP_NAME>        attributs : dofs (n_dofs,), nodes (n_nodes,)
-%       /<config_id>     attributs : l, w, ...
+%   /<GROUP_NAME>
+%       /<config_id>     attributs : l, w, ..., dofs (n_dofs,), nodes (n_nodes,)
 %           K, M   (n_dofs, n_dofs)
 %           XYZ    (n_nodes, 3)  positions en um, ordre de `nodes`
 %
+%   Les noeuds sont numérotés '1', '2', ... dans l'ordre de `nodes`.
 %   Les positions sont lues sur les attachements (att.xcx/.xcy/.xcz) après
 %   résolution : elles suivent le balayage paramétrique.
 %
-%   Les formes ci-dessus sont celles lues en Python (h5py, ordre C) : les
-%   tableaux sont transposés à l'écriture pour produire le même fichier que
-%   mph2hdf.py.
+%   Formes vues depuis Python (h5py, ordre C) : les tableaux sont transposés
+%   à l'écriture.
 %
 %   À lancer depuis « COMSOL Multiphysics with MATLAB » (ou après mphstart).
 
@@ -23,11 +23,11 @@ MPH_FILE   = 'C:\Users\GM287120\Desktop\Comsol\SuperElements\p110.mph';
 GROUP_NAME = 'p110';
 
 dofs = {'eta1', ...
-        'n1.ux', 'n1.uy', 'n1.uz', 'n1.rx', 'n1.ry', 'n1.rz', ...
-        'n2.ux', 'n2.uy', 'n2.uz', 'n2.rx', 'n2.ry', 'n2.rz'};
+        '1.ux', '1.uy', '1.uz', '1.rx', '1.ry', '1.rz', ...
+        '2.ux', '2.uy', '2.uz', '2.rx', '2.ry', '2.rz'};
 
-nodes = struct('n1', 'comp1.solid.att1', ...
-               'n2', 'comp1.solid.att2');
+nodes = {'comp1.solid.att1', ...                % noeud 1
+         'comp1.solid.att2'};                   % noeud 2
 
 parameters = struct('l', [15 30 130], ...
                     'w', 3);
@@ -36,9 +36,8 @@ S = [1, repmat([1 1 1 0.5e6 0.5e6 0.5e6], 1, 2)];
 %% ──────────────────────────────────── BACKEND ───────────────────────────
 assert(numel(S) == numel(dofs), 'S a %d termes pour %d DDL', numel(S), numel(dofs));
 
-combos   = balayage(parameters);
-grp      = ['/' GROUP_NAME];
-grpAttrs = struct('dofs', {dofs}, 'nodes', {fieldnames(nodes)});
+combos = balayage(parameters);
+meta   = struct('dofs', {dofs}, 'nodes', {cellstr(string(1:numel(nodes)))});
 
 disp('Chargement du modèle COMSOL...')
 model   = mphload(MPH_FILE);
@@ -51,19 +50,18 @@ for i = 1:numel(combos)
     p = combos(i);
     fprintf('\n[%d/%d] %s\n', i, numel(combos), jsonencode(p));
 
-    for name = fieldnames(p).'
-        model.param.set(name{1}, num2str(p.(name{1}), 16));
+    for f = fieldnames(p).'
+        model.param.set(f{1}, num2str(p.(f{1}), 16));
     end
     study.run;
 
     sys  = model.result.numerical(SYS_MATRIX);
-    XYZ  = attCoords(model, struct2cell(nodes));
     data = struct('K',   reducedMatrix(sys, DATASET_ROM, 'stiffness', S), ...
                   'M',   reducedMatrix(sys, DATASET_ROM, 'mass', S), ...
-                  'XYZ', XYZ);
+                  'XYZ', attCoords(model, nodes));
 
-    fprintf('    XYZ (um) : %s\n', mat2str(round(XYZ, 3)));
-    fprintf('    -> %s/%s\n', GROUP_NAME, save2hdf(H5_FILE, grp, grpAttrs, p, data));
+    fprintf('    XYZ (um) : %s\n', mat2str(round(data.XYZ, 3)));
+    fprintf('    -> %s/%s\n', GROUP_NAME, save2hdf(H5_FILE, GROUP_NAME, p, data, meta));
 end
 
 com.comsol.model.util.ModelUtil.remove(model.tag);
@@ -81,13 +79,12 @@ end
 combos = cell2struct(num2cell(vals), names, 2);
 end
 
-function A = cleanMatrix(A, tol)
+function A = cleanMatrix(A)
 %CLEANMATRIX Symétrise et supprime le bruit numérique (diagonale conservée).
-if nargin < 2, tol = 1e-8; end
 A     = (A + A.') / 2;
 d     = abs(diag(A));
 denom = sqrt(d * d.');
-A((abs(A) < tol * denom | denom == 0) & ~eye(size(A))) = 0;
+A((abs(A) < 1e-8 * denom | denom == 0) & ~eye(size(A))) = 0;
 end
 
 function xyz = attCoords(model, tags)
@@ -110,53 +107,48 @@ assert(isequal(size(A), [n n]), 'COMSOL renvoie une matrice %dx%d pour %d DDL', 
 A = cleanMatrix(S(:) .* A .* S(:).');
 end
 
-function id = save2hdf(h5File, grp, grpAttrs, p, data)
+function id = save2hdf(h5File, group, p, data, meta)
 %SAVE2HDF Écrit une configuration dans le HDF5, renvoie son identifiant.
-[id, isNew] = configId(h5File, grp, p);
+grp = ['/' group];
+id  = configId(h5File, grp, p);
 cfg = [grp '/' id];
-for name = fieldnames(data).'
-    writeDataset(h5File, [cfg '/' name{1}], data.(name{1}));
+for f = fieldnames(data).'
+    writeDataset(h5File, [cfg '/' f{1}], data.(f{1}));
 end
-if isNew
-    for name = fieldnames(p).'
-        h5writeatt(h5File, cfg, name{1}, p.(name{1}));
-    end
+for f = fieldnames(p).'
+    h5writeatt(h5File, cfg, f{1}, p.(f{1}));
 end
-for name = fieldnames(grpAttrs).'
-    writeStrAttr(h5File, grp, name{1}, grpAttrs.(name{1}));
+for f = fieldnames(meta).'
+    writeStrAttr(h5File, cfg, f{1}, meta.(f{1}));
 end
 end
 
-function [id, isNew] = configId(h5File, grp, p)
-%CONFIGID Configuration existante de mêmes paramètres, sinon nouvel identifiant.
+function id = configId(h5File, grp, p)
+%CONFIGID Identifiant de la configuration de mêmes paramètres, sinon nouveau.
 try
     info = h5info(h5File, grp);
     cfgs = info.Groups;
 catch
     cfgs = [];                                  % fichier ou groupe inexistant
 end
-isNew = false;
-ids   = 0;
+ids = 0;
 for c = reshape(cfgs, 1, [])
     id = c.Name(numel(grp) + 2:end);            % '/p110/12' -> '12'
-    if ~isempty(regexp(id, '^\d+$', 'once'))
-        if sameParams(c, p), return, end
-        ids(end + 1) = str2double(id); %#ok<AGROW>
-    end
+    if isempty(regexp(id, '^\d+$', 'once')), continue, end
+    if sameParams(c.Attributes, p), return, end
+    ids(end + 1) = str2double(id); %#ok<AGROW>
 end
-id    = num2str(max(ids) + 1);
-isNew = true;
+id = num2str(max(ids) + 1);
 end
 
-function tf = sameParams(info, p)
-%SAMEPARAMS Vrai si le groupe (h5info) porte les valeurs de p, à np.isclose près.
+function tf = sameParams(attrs, p)
+%SAMEPARAMS Vrai si les attributs (h5info) valent p, à np.isclose près.
 isclose = @(a, b) abs(a - b) <= 1e-8 + 1e-5 * abs(b);
-a = info.Attributes;
-if isempty(a), a = struct('Name', {}, 'Value', {}); end
+if isempty(attrs), attrs = struct('Name', {}, 'Value', {}); end
 tf = true;
-for name = fieldnames(p).'
-    k  = strcmp({a.Name}, name{1});
-    tf = tf && any(k) && isclose(a(k).Value, p.(name{1}));
+for f = fieldnames(p).'
+    k  = strcmp({attrs.Name}, f{1});
+    tf = tf && any(k) && isclose(attrs(k).Value, p.(f{1}));
 end
 end
 
